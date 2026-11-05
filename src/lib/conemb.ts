@@ -67,7 +67,7 @@ export function cnpjValido(cnpj: string): boolean {
   const d = cnpj.replace(/\D/g, "");
   if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
   const calc = (base: string, pesos: number[]) =>
-    base.split("").reduce((acc, n, i) => acc + Number(n) * pesos[i], 0);
+    base.split("").reduce((acc, n, i) => acc + Number(n) * (pesos[i] ?? 0), 0);
   const p1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
   const p2 = [6, ...p1];
   let r = calc(d.slice(0, 12), p1) % 11;
@@ -83,7 +83,7 @@ export function validarConemb(conteudo: string): ValidationResult {
   const add = (tipo: MsgTipo, texto: string) => mensagens.push({ tipo, texto });
 
   const brutas = conteudo.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  while (brutas.length && brutas[brutas.length - 1].trim() === "") brutas.pop();
+  while (brutas.length && (brutas[brutas.length - 1] ?? "").trim() === "") brutas.pop();
   const totalLinhas = brutas.length;
 
   if (totalLinhas === 0) {
@@ -105,16 +105,16 @@ export function validarConemb(conteudo: string): ValidationResult {
 
   let transportadoraCnpj = "";
   let transportadoraNome = "";
-  let atual: CteInfo | null = null;
-  let qtd529: number | null = null;
-  let valor529: number | null = null;
+  let atual = null as CteInfo | null;
+  let qtd529 = null as number | null;
+  let valor529 = null as number | null;
   let tem520 = false, tem521 = false;
 
   linhas.forEach((l, i) => {
     const n = i + 1;
-    if (l.trim() === "") return add("erro", `Linha ${n}: linha em branco não é permitida.`);
+    if (l.trim() === "") { add("erro", `Linha ${n}: linha em branco não é permitida.`); return; }
     const tipo = campo(l, 1, 3);
-    if (!TIPOS_REGISTRO[tipo]) return add("erro", `Linha ${n}: identificador de registro "${tipo}" não existe no CONEMB 5.0.`);
+    if (!TIPOS_REGISTRO[tipo]) { add("erro", `Linha ${n}: identificador de registro "${tipo}" não existe no CONEMB 5.0.`); return; }
 
     switch (tipo) {
       case "000":
@@ -177,7 +177,7 @@ export function validarConemb(conteudo: string): ValidationResult {
     }
   });
 
-  if (campo(linhas[0], 1, 3) !== "000") add("erro", "Registro 000 (cabeçalho de intercâmbio) não encontrado na primeira linha.");
+  if (campo(linhas[0] ?? "", 1, 3) !== "000") add("erro", "Registro 000 (cabeçalho de intercâmbio) não encontrado na primeira linha.");
   if (!tem520) add("erro", "Registro 520 (cabeçalho de documento) não encontrado.");
   if (!tem521) add("erro", "Registro 521 (dados da transportadora) não encontrado.");
   ctes.forEach((c) => { if (c.valorFrete === null) add("erro", `CT-e ${c.numero || "sem número"}: falta o registro 523 (valores).`); });
