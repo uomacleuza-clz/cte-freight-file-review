@@ -1,5 +1,5 @@
-// Validação estrutural de arquivos CONEMB 5.0 (CT-e).
-// Registros de largura fixa; a largura e os tipos abaixo seguem o padrão CONEMB.
+// Validação de arquivos CONEMB 5.0 (layout TIVIT, 31/07/2008).
+// Registros de largura fixa com 350 caracteres; identificadores 000, 520–529.
 
 export type MsgTipo = "erro" | "aviso" | "info";
 
@@ -13,6 +13,10 @@ export interface CteInfo {
   serie: string;
   emissao: string;
   cnpjEmissor: string;
+  transportadora: string;
+  remetente: string;
+  destinatario: string;
+  valorFrete: number | null;
   chave: string;
 }
 
@@ -24,40 +28,41 @@ export interface ValidationResult {
   avisos: number;
 }
 
-export const LARGURA_REGISTRO = 120;
+export const LARGURA_REGISTRO = 350;
 
-// Tipos de registro reconhecidos no layout CONEMB 5.0
 const TIPOS_REGISTRO: Record<string, string> = {
-  "000": "Cabeçalho (remetente)",
-  "310": "Dados do conhecimento (CT-e)",
-  "311": "Dados complementares",
-  "312": "Dados das mercadorias",
-  "313": "Componentes do valor da prestação",
-  "314": "Dados de seguros",
-  "315": "Conhecimentos anexos",
-  "316": "Dados de CT-e globalizado",
-  "317": "Outros embarcadores",
-  "318": "Dados de cobrança",
-  "319": "Outros dados de cobrança",
-  "331": "Documentos fiscais (NF-e)",
-  "332": "Documentos fiscais (NF-e)",
-  "333": "Documentos fiscais (NF-e)",
-  "334": "Documentos fiscais (NF-e)",
-  "335": "Documentos fiscais (NF-e)",
-  "336": "Documentos fiscais (NF-e)",
-  "337": "Documentos fiscais (NF-e)",
-  "338": "Documentos fiscais (NF-e)",
-  "339": "Documentos fiscais (NF-e)",
-  "340": "Documentos fiscais (NF-e)",
-  "999": "Total de documentos (trailer)",
+  "000": "Cabeçalho de intercâmbio",
+  "520": "Cabeçalho de documento",
+  "521": "Dados da transportadora",
+  "522": "Conhecimentos embarcados",
+  "523": "Valores do conhecimento",
+  "524": "Notas componentes do conhecimento",
+  "525": "Entrega casada/redespacho",
+  "527": "Dados do consignatário",
+  "529": "Total de conhecimentos embarcados",
 };
 
-/** Extrai campo 1-based inclusivo: sub(3, 5) => posições 3 a 5. */
-function sub(linha: string, ini: number, fim: number): string {
-  return linha.substring(ini - 1, fim);
+/** Campo 1-based: posição inicial e tamanho, como no manual. */
+function campo(linha: string, pos: number, tam: number): string {
+  return linha.substring(pos - 1, pos - 1 + tam);
 }
 
-/** Valida dígitos verificadores de CNPJ (14 dígitos). */
+/** Número N inteiros,decimais (ex.: 13,2 ocupa 15 posições, sem vírgula). */
+function numero(linha: string, pos: number, inteiros: number, decimais: number): number | null {
+  const s = campo(linha, pos, inteiros + decimais).trim();
+  if (!/^\d+$/.test(s)) return null;
+  return Number(s) / 10 ** decimais;
+}
+
+function dataValida(ddmmaaaa: string): boolean {
+  if (!/^\d{8}$/.test(ddmmaaaa)) return false;
+  const d = +ddmmaaaa.slice(0, 2), m = +ddmmaaaa.slice(2, 4), a = +ddmmaaaa.slice(4);
+  const dt = new Date(a, m - 1, d);
+  return dt.getFullYear() === a && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+
+const fmtData = (s: string) => (dataValida(s) ? `${s.slice(0, 2)}/${s.slice(2, 4)}/${s.slice(4)}` : s);
+
 export function cnpjValido(cnpj: string): boolean {
   const d = cnpj.replace(/\D/g, "");
   if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
@@ -75,84 +80,118 @@ export function cnpjValido(cnpj: string): boolean {
 export function validarConemb(conteudo: string): ValidationResult {
   const mensagens: Mensagem[] = [];
   const ctes: CteInfo[] = [];
-
   const add = (tipo: MsgTipo, texto: string) => mensagens.push({ tipo, texto });
 
-  // Normaliza quebras de linha e remove linha vazia final
-  const linhas = conteudo.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  if (linhas.length && linhas[linhas.length - 1].trim() === "") linhas.pop();
+  const brutas = conteudo.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  while (brutas.length && brutas[brutas.length - 1].trim() === "") brutas.pop();
+  const totalLinhas = brutas.length;
 
-  const totalLinhas = linhas.length;
-
-  if (totalLinhas === 0 || (totalLinhas === 1 && linhas[0].trim() === "")) {
+  if (totalLinhas === 0) {
     add("erro", "O arquivo está vazio.");
     return resumo(mensagens, ctes, totalLinhas);
   }
 
-  // Linhas em branco no meio do arquivo
+  // Largura: maior que 350 é erro; menor é aceito (espaços finais cortados) com aviso.
+  const longas: number[] = [];
+  const curtas: number[] = [];
+  const linhas = brutas.map((l, i) => {
+    if (l.length > LARGURA_REGISTRO) longas.push(i + 1);
+    else if (l.length < LARGURA_REGISTRO && l.trim() !== "") curtas.push(i + 1);
+    return l.padEnd(LARGURA_REGISTRO, " ");
+  });
+  const lista = (n: number[]) => n.slice(0, 5).join(", ") + (n.length > 5 ? ` e mais ${n.length - 5}` : "");
+  if (longas.length) add("erro", `${longas.length} linha(s) com mais de ${LARGURA_REGISTRO} caracteres (linhas: ${lista(longas)}).`);
+  if (curtas.length) add("aviso", `${curtas.length} linha(s) com menos de ${LARGURA_REGISTRO} caracteres; completadas com espaços (linhas: ${lista(curtas)}).`);
+
+  let transportadoraCnpj = "";
+  let transportadoraNome = "";
+  let atual: CteInfo | null = null;
+  let qtd529: number | null = null;
+  let valor529: number | null = null;
+  let tem520 = false, tem521 = false;
+
   linhas.forEach((l, i) => {
-    if (l.trim() === "") add("erro", `Linha ${i + 1}: linha em branco não é permitida.`);
-  });
+    const n = i + 1;
+    if (l.trim() === "") return add("erro", `Linha ${n}: linha em branco não é permitida.`);
+    const tipo = campo(l, 1, 3);
+    if (!TIPOS_REGISTRO[tipo]) return add("erro", `Linha ${n}: identificador de registro "${tipo}" não existe no CONEMB 5.0.`);
 
-  // Largura dos registros
-  const largurasErradas: number[] = [];
-  linhas.forEach((l, i) => {
-    if (l.trim() !== "" && l.length !== LARGURA_REGISTRO) largurasErradas.push(i + 1);
-  });
-  if (largurasErradas.length) {
-    const amostra = largurasErradas.slice(0, 5).join(", ");
-    const extra = largurasErradas.length > 5 ? ` e mais ${largurasErradas.length - 5}` : "";
-    add(
-      "erro",
-      `${largurasErradas.length} linha(s) fora do tamanho padrão de ${LARGURA_REGISTRO} caracteres (linhas: ${amostra}${extra}).`
-    );
-  }
-
-  // Tipos de registro
-  linhas.forEach((l, i) => {
-    if (l.trim() === "") return;
-    const tipo = sub(l, 1, 3);
-    if (!TIPOS_REGISTRO[tipo]) add("erro", `Linha ${i + 1}: tipo de registro "${tipo}" não reconhecido no layout CONEMB.`);
-  });
-
-  // Cabeçalho 000
-  const idx000 = linhas.findIndex((l) => sub(l, 1, 3) === "000");
-  if (idx000 === -1) {
-    add("erro", "Registro 000 (cabeçalho/remetente) não encontrado.");
-  } else {
-    if (idx000 !== 0) add("erro", `O registro 000 (cabeçalho) deve ser a primeira linha do arquivo (encontrado na linha ${idx000 + 1}).`);
-    const qtd000 = linhas.filter((l) => sub(l, 1, 3) === "000").length;
-    if (qtd000 > 1) add("erro", `Foram encontrados ${qtd000} registros 000; o arquivo deve ter apenas um cabeçalho.`);
-  }
-
-  // Trailer 999
-  const idx999 = linhas.map((l, i) => (sub(l, 1, 3) === "999" ? i : -1)).filter((i) => i >= 0);
-  if (!idx999.length) {
-    add("erro", "Registro 999 (total de documentos/trailer) não encontrado.");
-  } else {
-    if (idx999[idx999.length - 1] !== linhas.length - 1) {
-      add("erro", `O registro 999 (trailer) deve ser a última linha do arquivo (encontrado na linha ${idx999[idx999.length - 1] + 1}).`);
-    }
-    if (idx999.length > 1) add("erro", `Foram encontrados ${idx999.length} registros 999; o arquivo deve ter apenas um trailer.`);
-  }
-
-  // CT-es: registro 310 (dados do conhecimento)
-  linhas.forEach((l) => {
-    if (sub(l, 1, 3) !== "310") return;
-    const cnpj = sub(l, 4, 17).trim();
-    ctes.push({ numero: "", serie: "", emissao: "", cnpjEmissor: cnpj, chave: "" });
-  });
-
-  if (!ctes.length) {
-    add("aviso", "Nenhum CT-e (registro 310) foi encontrado no arquivo.");
-  } else {
-    ctes.forEach((c, i) => {
-      if (!/^\d{14}$/.test(c.cnpjEmissor)) {
-        add("erro", `CT-e ${i + 1}: CNPJ da transportadora emissora ("${c.cnpjEmissor || "vazio"}") não é numérico de 14 dígitos.`);
-      } else if (!cnpjValido(c.cnpjEmissor)) {
-        add("erro", `CT-e ${i + 1}: CNPJ da transportadora emissora (${c.cnpjEmissor}) está com dígito verificador inválido.`);
+    switch (tipo) {
+      case "000":
+        if (i !== 0) add("erro", `Linha ${n}: o registro 000 deve ser a primeira linha do arquivo.`);
+        break;
+      case "520":
+        tem520 = true;
+        break;
+      case "521":
+        tem521 = true;
+        if (!tem520) add("erro", `Linha ${n}: registro 521 sem o registro 520 antes.`);
+        transportadoraCnpj = campo(l, 4, 14).trim();
+        transportadoraNome = campo(l, 18, 50).trim();
+        if (!cnpjValido(transportadoraCnpj)) add("erro", `Linha ${n}: CNPJ da transportadora (${transportadoraCnpj || "vazio"}) é inválido.`);
+        break;
+      case "522": {
+        if (!tem521) add("erro", `Linha ${n}: registro 522 sem o registro 521 (transportadora) antes.`);
+        const num = campo(l, 19, 12).trim();
+        const emissao = campo(l, 31, 8);
+        const cnpjEmissor = campo(l, 40, 14).trim();
+        atual = {
+          numero: num,
+          serie: campo(l, 14, 5).trim(),
+          emissao: fmtData(emissao),
+          cnpjEmissor,
+          transportadora: transportadoraNome || transportadoraCnpj,
+          remetente: campo(l, 54, 14).trim(),
+          destinatario: campo(l, 82, 14).trim(),
+          valorFrete: null,
+          chave: campo(l, 219, 45).trim(),
+        };
+        ctes.push(atual);
+        const ref = `Linha ${n} (CT-e ${num || "sem número"})`;
+        if (!num) add("erro", `${ref}: número do conhecimento não informado.`);
+        if (!dataValida(emissao)) add("erro", `${ref}: data de emissão "${emissao.trim()}" inválida (esperado DDMMAAAA).`);
+        if (!/^[CF]$/.test(campo(l, 39, 1))) add("erro", `${ref}: condição de frete deve ser C (CIF) ou F (FOB).`);
+        if (!cnpjValido(cnpjEmissor)) add("erro", `${ref}: CNPJ da filial emissora (${cnpjEmissor || "vazio"}) é inválido.`);
+        if (!cnpjValido(atual.remetente)) add("erro", `${ref}: CNPJ do emissor da nota fiscal (${atual.remetente || "vazio"}) é inválido.`);
+        if (atual.destinatario && !cnpjValido(atual.destinatario)) add("aviso", `${ref}: CNPJ do destinatário (${atual.destinatario}) é inválido.`);
+        if (!campo(l, 110, 5).trim()) add("erro", `${ref}: CFOP não informado.`);
+        if (atual.chave && !/^\d{44}/.test(atual.chave)) add("aviso", `${ref}: chave do CT-e não tem 44 dígitos.`);
+        break;
       }
-    });
+      case "523": {
+        if (!atual) { add("erro", `Linha ${n}: registro 523 sem um conhecimento (522) antes.`); break; }
+        const v = numero(l, 41, 13, 2);
+        if (v === null) add("erro", `Linha ${n} (CT-e ${atual.numero}): valor total do frete não é numérico.`);
+        atual.valorFrete = v;
+        break;
+      }
+      case "524":
+        if (!atual) add("erro", `Linha ${n}: registro 524 sem um conhecimento (522) antes.`);
+        else if (!/^\d{9}$/.test(campo(l, 18, 9).trim().padStart(9, "0"))) add("erro", `Linha ${n} (CT-e ${atual.numero}): número da nota fiscal inválido.`);
+        break;
+      case "529":
+        qtd529 = numero(l, 4, 4, 0);
+        valor529 = numero(l, 8, 13, 2);
+        if (i !== linhas.length - 1) add("aviso", `Linha ${n}: registro 529 (total) não é a última linha do arquivo.`);
+        break;
+    }
+  });
+
+  if (campo(linhas[0], 1, 3) !== "000") add("erro", "Registro 000 (cabeçalho de intercâmbio) não encontrado na primeira linha.");
+  if (!tem520) add("erro", "Registro 520 (cabeçalho de documento) não encontrado.");
+  if (!tem521) add("erro", "Registro 521 (dados da transportadora) não encontrado.");
+  ctes.forEach((c) => { if (c.valorFrete === null) add("erro", `CT-e ${c.numero || "sem número"}: falta o registro 523 (valores).`); });
+
+  if (!ctes.length) add("aviso", "Nenhum conhecimento (registro 522) foi encontrado no arquivo.");
+
+  if (qtd529 === null && valor529 === null) {
+    add("erro", "Registro 529 (total de conhecimentos) não encontrado.");
+  } else {
+    if (qtd529 !== ctes.length) add("erro", `Registro 529 informa ${qtd529 ?? "?"} conhecimento(s), mas o arquivo tem ${ctes.length}.`);
+    const soma = ctes.reduce((s, c) => s + (c.valorFrete ?? 0), 0);
+    if (valor529 === null || Math.abs(valor529 - soma) > 0.005) {
+      add("erro", `Registro 529 informa valor total ${valor529?.toFixed(2) ?? "?"}, mas a soma dos fretes é ${soma.toFixed(2)}.`);
+    }
   }
 
   return resumo(mensagens, ctes, totalLinhas);
