@@ -173,10 +173,10 @@ function Index() {
                     <td className="px-4 py-2">{c.numero || "—"}</td>
                     <td className="px-4 py-2">{c.serie || "—"}</td>
                     <td className="px-4 py-2 whitespace-nowrap">{c.emissao || "—"}</td>
-                    <td className="px-4 py-2 whitespace-nowrap">{c.cnpjEmissor || "—"}</td>
-                    <td className="px-4 py-2">—</td>
-                    <td className="px-4 py-2">—</td>
-                    <td className="px-4 py-2">—</td>
+                    <td className="px-4 py-2 whitespace-nowrap">{c.transportadora ? `${c.transportadora} (${c.cnpjEmissor})` : c.cnpjEmissor || "—"}</td>
+                    <td className="px-4 py-2 whitespace-nowrap">{c.remetente || "—"}</td>
+                    <td className="px-4 py-2 whitespace-nowrap">{c.destinatario || "—"}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-right">{c.valorFrete !== null ? c.valorFrete.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—"}</td>
                   </tr>
                 ))}
               </tbody>
